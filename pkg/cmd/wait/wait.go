@@ -116,6 +116,8 @@ func NewCmdWait(restClientGetter genericclioptions.RESTClientGetter, streams gen
 		Run: func(cmd *cobra.Command, args []string) {
 			o, err := flags.ToOptions(args)
 			cmdutil.CheckErr(err)
+			err = flags.WaitUntilAvailable(o)
+			cmdutil.CheckErr(err)
 			err = o.RunWait()
 			cmdutil.CheckErr(err)
 		},
@@ -155,7 +157,6 @@ func (flags *WaitFlags) ToOptions(args []string) (*WaitOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	effectiveTimeout := flags.Timeout
 	if effectiveTimeout < 0 {
 		effectiveTimeout = 168 * time.Hour
@@ -170,8 +171,28 @@ func (flags *WaitFlags) ToOptions(args []string) (*WaitOptions, error) {
 		ConditionFn: conditionFn,
 		IOStreams:   flags.IOStreams,
 	}
-
 	return o, nil
+}
+
+func (flags *WaitFlags) WaitUntilAvailable(o *WaitOptions) error {
+	if strings.HasPrefix(flags.ForCondition, "condition=") {
+		// Wait for the resources to be available
+		return wait.PollImmediate(10*time.Second, o.Timeout, func() (bool, error) {
+			visitCount := 0
+			err := o.ResourceFinder.Do().Visit(func(info *resource.Info, err error) error {
+				if err != nil {
+					return err
+				}
+				visitCount++
+				return nil
+			})
+			if err != nil {
+				return false, err
+			}
+			return visitCount > 0, nil
+		})
+	}
+	return nil
 }
 
 func conditionFuncFor(condition string, errOut io.Writer) (ConditionFunc, error) {
